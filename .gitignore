@@ -1,1 +1,4 @@
 .trash
+.idea
+/data
+__pycache__/
