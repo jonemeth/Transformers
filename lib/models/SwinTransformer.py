@@ -1,10 +1,10 @@
 import math
 from typing import Tuple, List
 
+import einops
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import einops
 
 from lib.models.common import TransformerEncoder, RelativePositionEncoding
 
@@ -41,8 +41,8 @@ class WindowAttention(nn.Module):
         self.shift = shift
 
         if self.shift:
-            self.register_buffer("upper_lower_mask", create_upper_lower_mask(window_size, window_size//2))
-            self.register_buffer("left_right_mask", create_left_right_mask(window_size, window_size//2))
+            self.register_buffer("upper_lower_mask", create_upper_lower_mask(window_size, window_size // 2))
+            self.register_buffer("left_right_mask", create_left_right_mask(window_size, window_size // 2))
 
         self.fc_qkv = nn.Linear(self.embedding_dims, 3 * self.embedding_dims)
         self.attention_dropout = nn.Dropout(0.0)
@@ -58,7 +58,7 @@ class WindowAttention(nn.Module):
         assert embedding_channels == self.embedding_dims
 
         if self.shift:
-            x = x.roll(shifts=(-w//2, -w//2), dims=(1, 2))
+            x = x.roll(shifts=(-w // 2, -w // 2), dims=(1, 2))
 
         # L == w*w
         x = einops.rearrange(x, 'b (h s1) (w s2) c -> b h w (s1 s2) c', s1=w, s2=w)  # (B H W C) -> (B h w L, C)
@@ -66,9 +66,12 @@ class WindowAttention(nn.Module):
         q, k, v = self.fc_qkv(x).split(self.embedding_dims, dim=4)
 
         # (B, h, w, L, C) -> (B, h, w, L, H, c)  -> (B, h, w, H, L, c)
-        q = q.view(batch_dim, height//w, width//w, w*w, self.num_heads, self.embedding_dims//self.num_heads).transpose(3, 4)
-        k = k.view(batch_dim, height//w, width//w, w*w, self.num_heads, self.embedding_dims//self.num_heads).transpose(3, 4)
-        v = v.view(batch_dim, height//w, width//w, w*w, self.num_heads, self.embedding_dims//self.num_heads).transpose(3, 4)
+        q = q.view(batch_dim, height // w, width // w, w * w, self.num_heads,
+                   self.embedding_dims // self.num_heads).transpose(3, 4)
+        k = k.view(batch_dim, height // w, width // w, w * w, self.num_heads,
+                   self.embedding_dims // self.num_heads).transpose(3, 4)
+        v = v.view(batch_dim, height // w, width // w, w * w, self.num_heads,
+                   self.embedding_dims // self.num_heads).transpose(3, 4)
 
         # -> (B, h, w, H, L, L)
         attention = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -82,37 +85,23 @@ class WindowAttention(nn.Module):
         attention = self.attention_dropout(attention)
         output = attention @ v
 
-        output = output.transpose(3, 4).contiguous().view(batch_dim, height//w, width//w, w*w*embedding_channels)
+        output = output.transpose(3, 4).contiguous().view(batch_dim, height // w, width // w,
+                                                          w * w * embedding_channels)
         output = einops.rearrange(output, 'b h w (s1 s2 c) -> b (h s1) (w s2) c', s1=w, s2=w)
 
         if self.shift:
-            output = output.roll(shifts=(w//2, w//2), dims=(1, 2))
+            output = output.roll(shifts=(w // 2, w // 2), dims=(1, 2))
 
         output = self.output_dropout(self.fc_proj(output))
 
         return output
 
-    # def get_rel_pos_enc(self):
-    #     indices = self.relative_indices.expand(self.num_heads, -1)
-    #     rel_pos_enc = self.pos_enc.gather(-1, indices)
-    #     rel_pos_enc = rel_pos_enc.unflatten(-1, (self.window_size**2, self.window_size**2))
-    #     return rel_pos_enc
-    #
-    # def get_indices(self):
-    #     x = torch.arange(self.window_size, dtype=torch.long)
-    #
-    #     y1, x1, y2, x2 = torch.meshgrid(x, x, x, x, indexing='ij')
-    #     indices = (y1 - y2 + self.window_size - 1) * (2 * self.window_size - 1) + x1 - x2 + self.window_size - 1
-    #     indices = indices.flatten()
-    #
-    #     return indices
-
 
 class PatchMerging(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
-        self.norm = nn.LayerNorm(in_channels*2*2)
-        self.linear = nn.Linear(in_channels*2*2, in_channels*2, bias=False)
+        self.norm = nn.LayerNorm(in_channels * 2 * 2)
+        self.linear = nn.Linear(in_channels * 2 * 2, in_channels * 2, bias=False)
 
     def forward(self, x):
         x = einops.rearrange(x, 'b (h s1) (w s2) c -> b h w (s1 s2 c)', s1=2, s2=2)
@@ -140,19 +129,21 @@ class SwinTransformer(nn.Module):
         self.scale_to_depth = nn.PixelUnshuffle(self.patch_size)
         self.patch_embedding = nn.Linear(self.in_shape[0] * self.patch_size ** 2, self.embedding_dims)
         self.patch_norm = nn.LayerNorm(self.embedding_dims)
-        self.position_embedding = nn.Parameter(torch.empty(1, self.in_shape[1] // self.patch_size, self.in_shape[2] // self.patch_size, self.embedding_dims).normal_(std=0.02)
-                                               , requires_grad=True)
+        self.position_embedding = nn.Parameter(
+            torch.empty(1, self.in_shape[1] // self.patch_size, self.in_shape[2] // self.patch_size,
+                        self.embedding_dims).normal_(std=0.02),
+            requires_grad=True)
         self.embedding_dropout = nn.Dropout(0.0)
 
         blocks = []
         channels = self.embedding_dims
-        spatial_size = (in_shape[1]//patch_size, in_shape[2]//patch_size)
+        spatial_size = (in_shape[1] // patch_size, in_shape[2] // patch_size)
         for d_ix in range(len(depths)):
             if d_ix > 0:
                 blocks.append(PatchMerging(channels))
                 channels *= 2
-                spatial_size = (spatial_size[0]//2, spatial_size[1]//2)
-                
+                spatial_size = (spatial_size[0] // 2, spatial_size[1] // 2)
+
             single_window = spatial_size[0] == window_sizes[d_ix] and spatial_size[1] == window_sizes[d_ix]
 
             assert 0 == spatial_size[0] % window_sizes[d_ix] and 0 == spatial_size[1] % window_sizes[d_ix]
@@ -173,7 +164,8 @@ class SwinTransformer(nn.Module):
         for n, m in self.named_modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None: nn.init.zeros_(m.bias)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
             elif isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.weight, 1.)
                 nn.init.zeros_(m.bias)
