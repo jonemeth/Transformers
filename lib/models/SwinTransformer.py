@@ -101,7 +101,7 @@ class PatchMerging(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.norm = nn.LayerNorm(in_channels * 2 * 2)
-        self.linear = nn.Linear(in_channels * 2 * 2, in_channels * 2, bias=False)
+        self.linear = nn.Linear(in_channels * 2 * 2, in_channels, bias=False)
 
     def forward(self, x):
         x = einops.rearrange(x, 'b (h s1) (w s2) c -> b h w (s1 s2 c)', s1=2, s2=2)
@@ -141,7 +141,6 @@ class SwinTransformer(nn.Module):
         for d_ix in range(len(depths)):
             if d_ix > 0:
                 blocks.append(PatchMerging(channels))
-                channels *= 2
                 spatial_size = (spatial_size[0] // 2, spatial_size[1] // 2)
 
             single_window = spatial_size[0] == window_sizes[d_ix] and spatial_size[1] == window_sizes[d_ix]
